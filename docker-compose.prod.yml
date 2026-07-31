@@ -1,0 +1,47 @@
+services:
+  api:
+    image: registry.example.com/shop-api:latest
+    privileged: true
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgres://app:SuperSecret123@db:5432/shop
+      WEB_CONCURRENCY: "16"
+    depends_on:
+      - db
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 5s
+      timeout: 2s
+      retries: 3
+
+  db:
+    image: postgres:latest
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: SuperSecret123
+      POSTGRES_DB: shop
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d shop"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  nginx:
+    image: nginx:latest
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - api
+    restart: always
+
+volumes:
+  db-data:

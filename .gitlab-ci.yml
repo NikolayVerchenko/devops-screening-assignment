@@ -1,0 +1,36 @@
+stages:
+  - deploy
+  - test
+  - build
+
+variables:
+  IMAGE: registry.example.com/shop-api:latest
+
+before_script:
+  - echo "$PROD_SSH_PRIVATE_KEY"
+
+build:
+  stage: build
+  script:
+    - docker build -t "$IMAGE" .
+    - docker push "$IMAGE"
+  only:
+    - main
+test:
+  stage: test
+  image: node:20
+  script:
+    - npm install
+    - npm test
+
+deploy:
+  stage: deploy
+  script:
+    - >
+      ssh deploy@prod
+      "cd /opt/shop &&
+      docker compose down -v &&
+      docker compose pull &&
+      docker compose up -d"
+  only:
+    - main
