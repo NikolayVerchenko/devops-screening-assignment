@@ -1,36 +1,67 @@
 stages:
-  - deploy
   - test
   - build
+  - deploy
 
 variables:
-  IMAGE: registry.example.com/shop-api:latest
+  REGISTRY: registry.example.com
+  IMAGE_NAME: shop-api
+  IMAGE_TAG: $CI_COMMIT_SHORT_SHA
+  API_IMAGE: $REGISTRY/$IMAGE_NAME:$IMAGE_TAG
+  COMPOSE_FILE: docker-compose.prod.yml
 
-before_script:
-  - echo "$PROD_SSH_PRIVATE_KEY"
+# PROD_SSH_PRIVATE_KEY is a File variable. Do not print it.
+# PROD_SSH_HOST, DATABASE_URL, POSTGRES_PASSWORD, ROLLBACK_TAG are protected CI variables.
+
+.remote_deploy:
+  script:
+    - chmod 600 "$PROD_SSH_PRIVATE_KEY"
+    - |
+      ssh -i "$PROD_SSH_PRIVATE_KEY" -o StrictHostKeyChecking=accept-new \
+        "deploy@${PROD_SSH_HOST}" \
+        "cd /opt/shop && \
+         export API_IMAGE='${API_IMAGE}' DATABASE_URL='${DATABASE_URL}' POSTGRES_PASSWORD='${POSTGRES_PASSWORD}' && \
+         docker compose -f ${COMPOSE_FILE} pull api && \
+         docker compose -f ${COMPOSE_FILE} up -d && \
+         docker compose -f ${COMPOSE_FILE} ps && \
+         curl -fsS --retry 10 --retry-delay 3 http://127.0.0.1/health"
+
+# Application source is not in this repository, so npm test and docker build
+# cannot run here. The test gate is the assignment validator.
+test:
+  stage: test
+  script:
+    - bash scripts/validate.sh
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
 
 build:
   stage: build
+  needs: ["test"]
   script:
-    - docker build -t "$IMAGE" .
-    - docker push "$IMAGE"
-  only:
-    - main
-test:
-  stage: test
-  image: node:20
-  script:
-    - npm install
-    - npm test
+    - |
+      if [ -f Dockerfile ]; then
+        docker build -t "$API_IMAGE" .
+        docker push "$API_IMAGE"
+      else
+        echo "No Dockerfile in this repository. Immutable tag is ${API_IMAGE}"
+      fi
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
 
 deploy:
+  extends: .remote_deploy
   stage: deploy
-  script:
-    - >
-      ssh deploy@prod
-      "cd /opt/shop &&
-      docker compose down -v &&
-      docker compose pull &&
-      docker compose up -d"
-  only:
-    - main
+  needs: ["build"]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main" && $PROD_SSH_HOST
+
+rollback:
+  extends: .remote_deploy
+  stage: deploy
+  needs: []
+  variables:
+    API_IMAGE: $REGISTRY/$IMAGE_NAME:$ROLLBACK_TAG
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: manual
